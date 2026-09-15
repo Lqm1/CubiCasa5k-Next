@@ -1,17 +1,66 @@
 [project]
 name = "cubicasa5k-next"
 version = "0.1.0"
-description = "Add your description here"
+description = "Clean-room reimplementation of the CubiCasa5k multi-task floorplan parsing model (paper-based, modern Python/PyTorch)"
 readme = "README.md"
 authors = [
     { name = "Lami", email = "154405627+Lqm1@users.noreply.github.com" }
 ]
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "numpy>=2.5.3",
+    "opencv-python>=5.0.0.93",
+    "pillow>=12.3.0",
+    "pyyaml>=6.0.3",
+    "rich>=15.0.0",
+    "scipy>=1.18.1",
+    "shapely>=2.1.2",
+    "torch>=2.14.0",
+    "torchvision>=0.29.0",
+    "tqdm>=4.70.1",
+    "typer>=0.27.2",
+]
 
 [project.scripts]
-cubicasa5k-next = "cubicasa5k_next:main"
+cubicasa5k-next = "cubicasa5k_next.cli.app:app"
 
 [build-system]
 requires = ["uv_build>=0.12.15,<0.13.0"]
 build-backend = "uv_build"
+
+[tool.uv]
+package = true
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W", "C90", "N"]
+ignore = ["E501", "B008", "N812", "C901"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.13"
+strict = false
+ignore_missing_imports = true
+show_error_codes = true
+plugins = []
+
+[[tool.mypy.overrides]]
+module = "cv2.*"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[dependency-groups]
+dev = [
+    "mypy>=2.3.1",
+    "pytest>=9.1.1",
+    "ruff>=0.16.7",
+]
