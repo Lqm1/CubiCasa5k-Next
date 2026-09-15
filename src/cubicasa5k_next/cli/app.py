@@ -15,6 +15,8 @@ from cubicasa5k_next.utils.image import load_rgb_image, save_colored_mask
 from cubicasa5k_next.utils.seed import set_random_seed
 
 app = typer.Typer(no_args_is_help=True)
+export_app = typer.Typer(no_args_is_help=True, help="Model export commands.")
+app.add_typer(export_app, name="export")
 
 
 def _resolve_device(requested: str) -> torch.device:
@@ -118,6 +120,47 @@ def infer(
         f"icons={len(vector_result.icons)} openings={len(vector_result.openings)} "
         f"junctions={len(vector_result.junctions)}"
     )
+
+
+@export_app.command("onnx")
+def export_onnx(
+    checkpoint: Path = typer.Argument(..., help="Model checkpoint file"),
+    output: Path = typer.Argument(..., help="Destination .onnx path"),
+    image_size: int = typer.Option(256, help="Square input resolution"),
+    opset: int = typer.Option(18, help="ONNX opset version"),
+) -> None:
+    """Export the hourglass model to ONNX and verify parity with torch."""
+    import numpy as np
+
+    from cubicasa5k_next.utils.checkpoint import load_checkpoint
+
+    model, _ = load_checkpoint(checkpoint, device=torch.device("cpu"))
+    model.eval()
+    dummy = torch.randn(1, 3, image_size, image_size)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    batch_dim = torch.export.Dim("batch")
+    torch.onnx.export(
+        model,
+        dummy,
+        str(output),
+        input_names=["image"],
+        output_names=["raw44"],
+        dynamic_shapes={"image": {0: batch_dim}},
+        opset_version=opset,
+    )
+    import onnx
+    import onnxruntime as ort
+
+    onnx_model = onnx.load(str(output))
+    onnx.checker.check_model(onnx_model)
+    session = ort.InferenceSession(str(output), providers=["CPUExecutionProvider"])
+    with torch.no_grad():
+        expected = model(dummy).numpy()
+    actual = session.run(["raw44"], {"image": dummy.numpy()})[0]
+    max_diff = float(np.abs(expected - actual).max())
+    typer.echo(f"exported {output} (opset={opset}) max_abs_diff={max_diff:.2e}")
+    if max_diff > 1e-3:
+        raise typer.BadParameter(f"ONNX parity check failed: diff={max_diff:.2e}")
 
 
 @app.command()

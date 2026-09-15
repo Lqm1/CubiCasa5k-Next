@@ -22,7 +22,8 @@ floorplan parsing model with modern Python (3.13) and PyTorch (2.x).
 - `src/cubicasa5k_next/postprocess/` — junction NMS, walls, rooms, icons, openings
 - `src/cubicasa5k_next/training/` — trainer loop, segmentation metrics
 - `src/cubicasa5k_next/inference/` — predictor with rotation TTA
-- `src/cubicasa5k_next/cli/` — `train`, `infer`, `smoke` commands
+- `src/cubicasa5k_next/cli/` — `train`, `infer`, `smoke`, `export onnx` commands
+- `examples/` — standalone samples (e.g. ONNX inference)
 
 ## Setup
 
