@@ -40,6 +40,42 @@ uv run --extra cu132 cubicasa5k-next train ./data/train ./data/val --epochs 400 
 uv run --extra cu132 cubicasa5k-next infer ./checkpoints/best.pt ./sample.png --output-dir ./outputs
 ```
 
+## TensorBoard
+
+The train CLI enables logging by default. Each invocation creates an isolated
+`<checkpoint_dir>/tensorboard/<run_name>_<timestamp>_<unique_id>/` directory.
+Python APIs use `tensorboard_dir=None` to disable logging; pass an explicit
+directory to enable it. An empty string is not a disable flag.
+
+Both projects expose the same options:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--tensorboard-dir` | `<checkpoint_dir>/tensorboard` | Log root |
+| `--tensorboard-run-name` | `cubicasa5k-next` | Run prefix; letters, digits, dots, underscores, hyphens |
+| `--no-tensorboard` | false | Disable all event logging |
+| `--tensorboard-image-every` | 5 | Images on epoch 1 and every N epochs; 0 disables |
+| `--tensorboard-max-images` | 4 | Maximum images from the first validation batch; 0 disables |
+| `--tensorboard-flush-secs` | 30 | Background flush interval; also flush after each epoch |
+
+```bash
+uv run --extra cu132 cubicasa5k-next train ./data/train ./data/val --tensorboard-run-name experiment-1
+uv run --extra cu132 tensorboard --logdir checkpoints/tensorboard
+uv run --extra cu132 cubicasa5k-next train ./data/train ./data/val --tensorboard-dir ./logs/tb --tensorboard-image-every 10
+uv run --extra cu132 cubicasa5k-next train ./data/train ./data/val --no-tensorboard
+```
+
+Use `--extra cpu` instead for CPU environments.
+Scalars use epoch steps and common `Loss/train`, `Loss/valid`, `Optimizer/lr`,
+`Metrics/valid_*` tags. Validation images use `Samples/valid/*`.
+Samples are collected during validation without another data-loader pass.
+New invocations, including resumed or fine-tuned training, always create a new
+run; previous event files are never purged. Resumed training keeps its checkpoint epoch numbering.
+
+CubiCasa additionally records loss components, uncertainty weights, room/icon mIoU and accuracy, room label images and junction heatmaps. Validation metrics accumulate fixed-size confusion matrices; classes with false positives count in mIoU even if absent from the targets.
+Model graph tracing is not performed during training.
+See the [PyTorch TensorBoard documentation](https://docs.pytorch.org/docs/stable/tensorboard.html).
+
 ## Testing
 
 ```bash

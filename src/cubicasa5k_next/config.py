@@ -42,6 +42,11 @@ class TrainingConfig:
     checkpoint_dir: str = "checkpoints"
     model: ModelConfig = field(default_factory=ModelConfig)
     augmentation: AugmentationConfig = field(default_factory=AugmentationConfig)
+    tensorboard_dir: str | None = None
+    tensorboard_run_name: str = "cubicasa5k-next"
+    tensorboard_image_every: int = 5
+    tensorboard_max_images: int = 4
+    tensorboard_flush_secs: int = 30
 
 
 @dataclass(frozen=True)

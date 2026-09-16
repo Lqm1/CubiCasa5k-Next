@@ -46,6 +46,22 @@ def train(
     num_workers: int = typer.Option(4, help="DataLoader workers (use 0 on Windows CPU)"),
     weights: Path | None = typer.Option(None, help="Resume from a checkpoint file"),
     device: str = typer.Option("auto", help="Compute device (auto, cpu, or cuda)"),
+    tensorboard_dir: Path | None = typer.Option(
+        None, help="TensorBoard log dir (default: <checkpoint_dir>/tensorboard)"
+    ),
+    no_tensorboard: bool = typer.Option(False, help="Disable TensorBoard logging"),
+    tensorboard_run_name: str = typer.Option(
+        "cubicasa5k-next", help="Run name prefix (letters, digits, dots, underscores, hyphens)"
+    ),
+    tensorboard_image_every: int = typer.Option(
+        5, min=0, help="Log images at epoch 1 and every N epochs; 0 disables images"
+    ),
+    tensorboard_max_images: int = typer.Option(
+        4, min=0, help="Maximum sample images; 0 disables images"
+    ),
+    tensorboard_flush_secs: int = typer.Option(
+        30, min=1, help="TensorBoard flush interval in seconds"
+    ),
 ) -> None:
     """Train the hourglass model (supports resuming from a checkpoint)."""
     active_device = _resolve_device(device)
@@ -53,6 +69,13 @@ def train(
         torch.backends.cudnn.benchmark = True
     set_random_seed(seed)
     augmentation = AugmentationConfig(image_size=image_size)
+    resolved_tensorboard_dir: str | None
+    if no_tensorboard:
+        resolved_tensorboard_dir = None
+    elif tensorboard_dir is not None:
+        resolved_tensorboard_dir = str(tensorboard_dir)
+    else:
+        resolved_tensorboard_dir = str(checkpoint_dir / "tensorboard")
     config = TrainingConfig(
         batch_size=batch_size,
         max_epochs=epochs,
@@ -62,6 +85,11 @@ def train(
         model=ModelConfig(),
         augmentation=augmentation,
         num_workers=num_workers,
+        tensorboard_dir=resolved_tensorboard_dir,
+        tensorboard_run_name=tensorboard_run_name,
+        tensorboard_image_every=tensorboard_image_every,
+        tensorboard_max_images=tensorboard_max_images,
+        tensorboard_flush_secs=tensorboard_flush_secs,
     )
     train_images, train_annotations = discover_pairs(train_root)
     validation_images, validation_annotations = discover_pairs(validation_root)
