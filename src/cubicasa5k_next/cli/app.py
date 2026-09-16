@@ -49,6 +49,12 @@ def train(
     tensorboard_dir: Path | None = typer.Option(
         None, help="TensorBoard log dir (default: <checkpoint_dir>/tensorboard)"
     ),
+    persistent_workers: bool = typer.Option(
+        False, help="Reuse workers across epochs; changes augmentation RNG sequence"
+    ),
+    target_cache_mb: int = typer.Option(
+        256, min=0, help="Target cache MiB per dataset per worker; 0 disables"
+    ),
     no_tensorboard: bool = typer.Option(False, help="Disable TensorBoard logging"),
     tensorboard_run_name: str = typer.Option(
         "cubicasa5k-next", help="Run name prefix (letters, digits, dots, underscores, hyphens)"
@@ -86,6 +92,8 @@ def train(
         augmentation=augmentation,
         num_workers=num_workers,
         tensorboard_dir=resolved_tensorboard_dir,
+        persistent_workers=persistent_workers,
+        target_cache_mb=target_cache_mb,
         tensorboard_run_name=tensorboard_run_name,
         tensorboard_image_every=tensorboard_image_every,
         tensorboard_max_images=tensorboard_max_images,
@@ -99,10 +107,18 @@ def train(
         raise typer.BadParameter(f"No (image, svg) pairs found under {validation_root}")
 
     train_dataset = SvgFloorplanDataset(
-        train_images, train_annotations, augmentation, training=True
+        train_images,
+        train_annotations,
+        augmentation,
+        training=True,
+        target_cache_mb=target_cache_mb,
     )
     validation_dataset = SvgFloorplanDataset(
-        validation_images, validation_annotations, augmentation, training=False
+        validation_images,
+        validation_annotations,
+        augmentation,
+        training=False,
+        target_cache_mb=target_cache_mb,
     )
     best_path = train_model(
         train_dataset, validation_dataset, config, device=active_device, resume_checkpoint=weights
@@ -116,12 +132,17 @@ def infer(
     image: Path = typer.Argument(..., help="Input floorplan image"),
     output_dir: Path = typer.Option(Path("outputs"), help="Where to write predictions"),
     use_tta: bool = typer.Option(False, help="Average predictions over 4 rotations"),
+    tta_batch_size: int = typer.Option(1, min=1, max=4, help="TTA batch size: 1, 2 or 4"),
     device: str = typer.Option("auto", help="Compute device (auto, cpu, or cuda)"),
 ) -> None:
     """Run inference and save segmentation masks plus vectorization stats."""
     output_dir.mkdir(parents=True, exist_ok=True)
     active_device = _resolve_device(device)
-    inference_config = InferenceConfig(use_test_time_rotation=use_tta, device=active_device.type)
+    if tta_batch_size not in (1, 2, 4):
+        raise typer.BadParameter("TTA batch size must be 1, 2 or 4")
+    inference_config = InferenceConfig(
+        use_test_time_rotation=use_tta, tta_batch_size=tta_batch_size, device=active_device.type
+    )
     # Single hourglass path handles checkpoint files with matching keys.
     predictor = FloorplanPredictor.from_checkpoint(checkpoint, inference_config, active_device)
     rgb = load_rgb_image(image, target_size=inference_config.image_size)
@@ -169,7 +190,7 @@ def export_onnx(
     batch_dim = torch.export.Dim("batch")
     torch.onnx.export(
         model,
-        dummy,
+        (dummy,),
         str(output),
         input_names=["image"],
         output_names=["raw44"],

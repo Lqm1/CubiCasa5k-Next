@@ -37,6 +37,8 @@ class TrainingConfig:
     adam_eps: float = 1e-8
     scheduler_patience: int = 20
     scheduler_factor: float = 0.1
+    persistent_workers: bool = False
+    target_cache_mb: int = 256
     num_workers: int = 4
     seed: int = 42
     checkpoint_dir: str = "checkpoints"
@@ -55,4 +57,5 @@ class InferenceConfig:
     junction_threshold: float = 0.4
     alignment_tolerance_px: int = 10
     use_test_time_rotation: bool = False
+    tta_batch_size: int = 1
     device: str = "cuda"

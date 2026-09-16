@@ -38,7 +38,11 @@ def recover_icon_boxes(
     boxes: list[IconBox] = []
     for top_left in by_kind[0]:
         for top_right in by_kind[1]:
+            if abs(top_left.y - top_right.y) > tolerance:
+                continue
             for bottom_right in by_kind[2]:
+                if abs(top_right.x - bottom_right.x) > tolerance:
+                    continue
                 for bottom_left in by_kind[3]:
                     xs = [top_left.x, top_right.x, bottom_right.x, bottom_left.x]
                     ys = [top_left.y, top_right.y, bottom_right.y, bottom_left.y]

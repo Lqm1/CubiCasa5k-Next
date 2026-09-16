@@ -12,13 +12,14 @@ from torch.utils.data import Dataset
 from cubicasa5k_next.config import AugmentationConfig
 from cubicasa5k_next.data.heatmaps import build_heatmap_targets
 from cubicasa5k_next.data.rasterizer import rasterize_polygons
-from cubicasa5k_next.data.svg_parser import parse_svg_polygons, read_svg_size
+from cubicasa5k_next.data.svg_parser import parse_svg_annotation
 from cubicasa5k_next.data.transforms import (
     apply_color_jitter,
     random_right_angle_rotation,
     resize_with_padding,
     to_normalized_tensor,
 )
+from cubicasa5k_next.target_cache import TargetCache, file_version
 
 
 @dataclass
@@ -39,6 +40,7 @@ class SvgFloorplanDataset(Dataset[FloorplanSample]):
         annotation_paths: list[Path],
         augmentation: AugmentationConfig | None = None,
         training: bool = True,
+        target_cache_mb: int = 256,
     ) -> None:
         if len(image_paths) != len(annotation_paths):
             raise ValueError("Image and annotation lists must have equal length")
@@ -46,6 +48,7 @@ class SvgFloorplanDataset(Dataset[FloorplanSample]):
         self.annotation_paths = annotation_paths
         self.augmentation = augmentation or AugmentationConfig()
         self.training = training
+        self.target_cache = TargetCache(target_cache_mb)
 
     def __len__(self) -> int:
         return len(self.image_paths)
@@ -58,22 +61,30 @@ class SvgFloorplanDataset(Dataset[FloorplanSample]):
             raise FileNotFoundError(f"Could not read image: {image_path}")
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-        polygons = parse_svg_polygons(annotation_path)
-        canvas_size = read_svg_size(annotation_path)
-        if canvas_size is None:
-            canvas_size = (float(image.shape[1]), float(image.shape[0]))
-
         target_size = self.augmentation.image_size
-        # Rasterize supervision at the training resolution directly.
-        room_mask, icon_mask = rasterize_polygons(
-            polygons, source_size=canvas_size, target_size=(target_size, target_size)
+        key = (
+            file_version(annotation_path),
+            image.shape[:2],
+            target_size,
+            self.augmentation.gaussian_radius,
         )
-        heatmaps = build_heatmap_targets(
-            polygons,
-            source_size=canvas_size,
-            target_size=(target_size, target_size),
-            radius=self.augmentation.gaussian_radius,
-        )
+        targets = self.target_cache.get(key)
+        if targets is None:
+            polygons, canvas_size = parse_svg_annotation(annotation_path)
+            if canvas_size is None:
+                canvas_size = (float(image.shape[1]), float(image.shape[0]))
+            room_mask, icon_mask = rasterize_polygons(
+                polygons, source_size=canvas_size, target_size=(target_size, target_size)
+            )
+            heatmaps = build_heatmap_targets(
+                polygons,
+                source_size=canvas_size,
+                target_size=(target_size, target_size),
+                radius=self.augmentation.gaussian_radius,
+            )
+            self.target_cache.put(key, (room_mask, icon_mask, heatmaps))
+        else:
+            room_mask, icon_mask, heatmaps = targets
 
         resized_image, _, _, _ = resize_with_padding(image, target_size)
         # Masks/heatmaps are already at target resolution; resize image only.

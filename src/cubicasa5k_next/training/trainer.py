@@ -36,6 +36,7 @@ def build_dataloaders(
         batch_size=config.batch_size,
         shuffle=True,
         num_workers=config.num_workers,
+        persistent_workers=config.persistent_workers and config.num_workers > 0,
         collate_fn=_collate,
         pin_memory=use_pin_memory,
         drop_last=True,
@@ -45,6 +46,7 @@ def build_dataloaders(
         batch_size=config.batch_size,
         shuffle=False,
         num_workers=config.num_workers,
+        persistent_workers=config.persistent_workers and config.num_workers > 0,
         collate_fn=_collate,
         pin_memory=use_pin_memory,
     )
@@ -163,12 +165,12 @@ def train_model(
             )
         for epoch in range(start_epoch, config.max_epochs + 1):
             model.train()
-            running_total = 0.0
-            running_heatmap = 0.0
-            running_seg = 0.0
-            running_room_ce = 0.0
-            running_icon_ce = 0.0
-            running_heat_mse = 0.0
+            running_total = torch.zeros((), dtype=torch.float64, device=active_device)
+            running_heatmap = torch.zeros((), dtype=torch.float64, device=active_device)
+            running_seg = torch.zeros((), dtype=torch.float64, device=active_device)
+            running_room_ce = torch.zeros((), dtype=torch.float64, device=active_device)
+            running_icon_ce = torch.zeros((), dtype=torch.float64, device=active_device)
+            running_heat_mse = torch.zeros((), dtype=torch.float64, device=active_device)
             num_batches = 0
             for batch in tqdm(train_loader, desc=f"epoch {epoch}", leave=False):
                 images = batch["image"].to(active_device, non_blocking=True)
@@ -186,12 +188,12 @@ def train_model(
                 scaler.scale(loss_output.total).backward()
                 scaler.step(optimizer)
                 scaler.update()
-                running_total += float(loss_output.total.detach().cpu())
-                running_heatmap += float(loss_output.heatmap_term.detach().cpu())
-                running_seg += float(loss_output.segmentation_term.detach().cpu())
-                running_room_ce += float(loss_output.room_cross_entropy.detach().cpu())
-                running_icon_ce += float(loss_output.icon_cross_entropy.detach().cpu())
-                running_heat_mse += float(loss_output.heatmap_mse.detach().cpu())
+                running_total += loss_output.total.detach().double()
+                running_heatmap += loss_output.heatmap_term.detach().double()
+                running_seg += loss_output.segmentation_term.detach().double()
+                running_room_ce += loss_output.room_cross_entropy.detach().double()
+                running_icon_ce += loss_output.icon_cross_entropy.detach().double()
+                running_heat_mse += loss_output.heatmap_mse.detach().double()
                 num_batches += 1
 
             log_images = writer is not None and should_log_images(
@@ -229,7 +231,7 @@ def train_model(
                     },
                     best_path,
                 )
-            train_loss = running_total / max(num_batches, 1)
+            train_loss = running_total.item() / max(num_batches, 1)
             print(
                 f"epoch={epoch} train_loss={train_loss:.4f} "
                 f"val_loss={snapshot.loss:.4f} best={best_loss:.4f}"
@@ -240,17 +242,17 @@ def train_model(
                 writer.add_scalar("Loss/train", train_loss, epoch)
                 writer.add_scalar("Loss/valid", snapshot.loss, epoch)
                 writer.add_scalar(
-                    "Loss/train_heatmap", running_heatmap / max(num_batches, 1), epoch
+                    "Loss/train_heatmap", running_heatmap.item() / max(num_batches, 1), epoch
                 )
-                writer.add_scalar("Loss/train_seg", running_seg / max(num_batches, 1), epoch)
+                writer.add_scalar("Loss/train_seg", running_seg.item() / max(num_batches, 1), epoch)
                 writer.add_scalar(
-                    "Loss/train_room_ce", running_room_ce / max(num_batches, 1), epoch
-                )
-                writer.add_scalar(
-                    "Loss/train_icon_ce", running_icon_ce / max(num_batches, 1), epoch
+                    "Loss/train_room_ce", running_room_ce.item() / max(num_batches, 1), epoch
                 )
                 writer.add_scalar(
-                    "Loss/train_heatmap_mse", running_heat_mse / max(num_batches, 1), epoch
+                    "Loss/train_icon_ce", running_icon_ce.item() / max(num_batches, 1), epoch
+                )
+                writer.add_scalar(
+                    "Loss/train_heatmap_mse", running_heat_mse.item() / max(num_batches, 1), epoch
                 )
                 writer.add_scalar("Loss/valid_heatmap", snapshot.heatmap_term, epoch)
                 writer.add_scalar("Loss/valid_seg", snapshot.segmentation_term, epoch)
@@ -313,12 +315,12 @@ def evaluate_detailed(
 ) -> ValidationSnapshot:
     """Evaluate the full validation split and keep samples for TensorBoard."""
     model.eval()
-    total = 0.0
-    heatmap_term = 0.0
-    segmentation_term = 0.0
-    room_ce = 0.0
-    icon_ce = 0.0
-    heat_mse = 0.0
+    total = torch.zeros((), dtype=torch.float64, device=device)
+    heatmap_term = torch.zeros((), dtype=torch.float64, device=device)
+    segmentation_term = torch.zeros((), dtype=torch.float64, device=device)
+    room_ce = torch.zeros((), dtype=torch.float64, device=device)
+    icon_ce = torch.zeros((), dtype=torch.float64, device=device)
+    heat_mse = torch.zeros((), dtype=torch.float64, device=device)
     count = 0
     room_confusion = torch.zeros((12, 12), dtype=torch.int64, device=device)
     icon_confusion = torch.zeros((11, 11), dtype=torch.int64, device=device)
@@ -337,12 +339,12 @@ def evaluate_detailed(
             heat_pred, heatmaps, room_logits, room_labels, icon_logits, icon_labels
         )
         batch_size = images.size(0)
-        total += float(loss_output.total.cpu()) * batch_size
-        heatmap_term += float(loss_output.heatmap_term.cpu()) * batch_size
-        segmentation_term += float(loss_output.segmentation_term.cpu()) * batch_size
-        room_ce += float(loss_output.room_cross_entropy.cpu()) * batch_size
-        icon_ce += float(loss_output.icon_cross_entropy.cpu()) * batch_size
-        heat_mse += float(loss_output.heatmap_mse.cpu()) * batch_size
+        total += loss_output.total.double() * batch_size
+        heatmap_term += loss_output.heatmap_term.double() * batch_size
+        segmentation_term += loss_output.segmentation_term.double() * batch_size
+        room_ce += loss_output.room_cross_entropy.double() * batch_size
+        icon_ce += loss_output.icon_cross_entropy.double() * batch_size
+        heat_mse += loss_output.heatmap_mse.double() * batch_size
         count += batch_size
         room_confusion += torch.bincount(
             (room_labels * 12 + room_logits.argmax(dim=1)).flatten(), minlength=144
@@ -360,12 +362,12 @@ def evaluate_detailed(
     room_miou, room_accuracy = _confusion_scores(room_confusion)
     icon_miou, icon_accuracy = _confusion_scores(icon_confusion)
     return ValidationSnapshot(
-        loss=total / denom,
-        heatmap_term=heatmap_term / denom,
-        segmentation_term=segmentation_term / denom,
-        room_cross_entropy=room_ce / denom,
-        icon_cross_entropy=icon_ce / denom,
-        heatmap_mse=heat_mse / denom,
+        loss=total.item() / denom,
+        heatmap_term=heatmap_term.item() / denom,
+        segmentation_term=segmentation_term.item() / denom,
+        room_cross_entropy=room_ce.item() / denom,
+        icon_cross_entropy=icon_ce.item() / denom,
+        heatmap_mse=heat_mse.item() / denom,
         room_mean_iou=room_miou,
         room_accuracy=room_accuracy,
         icon_mean_iou=icon_miou,

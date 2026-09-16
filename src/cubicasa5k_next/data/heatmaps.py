@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from functools import lru_cache
 
 import numpy as np
 
@@ -84,10 +85,8 @@ def _wall_junction_index(polygon: AnnotatedPolygon, vertex: int) -> int:
     return 4 + quadrant
 
 
-def _splat_gaussian(canvas: np.ndarray, center_x: float, center_y: float, radius: int) -> None:
-    height, width = canvas.shape
-    cx = int(round(center_x))
-    cy = int(round(center_y))
+@lru_cache(maxsize=32)
+def _gaussian_kernel(radius: int) -> np.ndarray:
     size = radius * 2 + 1
     # Precompute a small Gaussian kernel.
     kernel = np.zeros((size, size), dtype=np.float32)
@@ -95,6 +94,15 @@ def _splat_gaussian(canvas: np.ndarray, center_x: float, center_y: float, radius
         for dx in range(size):
             dist_sq = (dx - radius) ** 2 + (dy - radius) ** 2
             kernel[dy, dx] = math.exp(-dist_sq / (2.0 * (radius / 2.0 + 1e-6) ** 2))
+    kernel.flags.writeable = False
+    return kernel
+
+
+def _splat_gaussian(canvas: np.ndarray, center_x: float, center_y: float, radius: int) -> None:
+    height, width = canvas.shape
+    cx = int(round(center_x))
+    cy = int(round(center_y))
+    kernel = _gaussian_kernel(radius)
     x0 = max(cx - radius, 0)
     x1 = min(cx + radius + 1, width)
     y0 = max(cy - radius, 0)

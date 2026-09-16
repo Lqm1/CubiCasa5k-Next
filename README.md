@@ -84,3 +84,24 @@ uvx ruff check src tests
 uvx ruff format --check src tests
 uv run --extra cu132 mypy src
 ```
+
+## Performance options
+
+Training accepts `--target-cache-mb 256` and `--persistent-workers`.
+The cache stores deterministic targets before random augmentation. Its limit is
+per dataset instance per process, not a global RAM limit; multiply the limit by
+the number of training and validation workers when budgeting memory.
+Use `--target-cache-mb 0` to disable it. Workers start with empty caches.
+With the default non-persistent workers, their caches are discarded each epoch.
+For multi-epoch cache reuse, enable persistent workers or use `--num-workers 0`.
+
+Persistent workers are opt-in because keeping worker RNG state changes the
+augmentation sequence compared with recreating workers. They are automatically
+disabled when the worker count is zero. The dataset files must remain stable
+during a run. SVG target cache keys include file modification time, size, resolution and Gaussian radius.
+
+Loss and confusion statistics accumulate on the compute device; floating loss
+sums use float64 to retain the previous Python accumulator precision.
+Training progress no longer transfers loss to the CPU for every batch.
+Inference uses inference mode without changing the output format or precision.
+TTA normalizes/uploads once and transfers the averaged result once. Optional `--tta-batch-size 2` or `4` uses more memory and may introduce small floating-point differences; the default is sequential `1`.

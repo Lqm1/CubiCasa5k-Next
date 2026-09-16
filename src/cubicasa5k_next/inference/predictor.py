@@ -45,7 +45,7 @@ class FloorplanPredictor:
         model, _ = load_checkpoint(checkpoint_path, device=device)
         return cls(model, config, device)
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def predict_arrays(self, image: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Run the network and return (room_logits, icon_logits, heatmaps) as numpy."""
         size = self.config.image_size
@@ -61,26 +61,20 @@ class FloorplanPredictor:
                 )[0].numpy()
             return split_raw_output(raw)
 
-        room_accumulator = None
-        icon_accumulator = None
-        heat_accumulator = None
-        for turns in range(4):
-            rotated = np.rot90(resized, turns).copy()
-            rotated_tensor = to_normalized_tensor(rotated).unsqueeze(0).to(self.device)
-            raw = self.model(rotated_tensor)[0].cpu().numpy()
-            room, icon, heat = split_raw_output(raw)
-            room = np.rot90(room, -turns, axes=(1, 2)).copy()
-            icon = np.rot90(icon, -turns, axes=(1, 2)).copy()
-            heat = np.rot90(heat, -turns, axes=(1, 2)).copy()
-            room_accumulator = room if room_accumulator is None else room_accumulator + room
-            icon_accumulator = icon if icon_accumulator is None else icon_accumulator + icon
-            heat_accumulator = heat if heat_accumulator is None else heat_accumulator + heat
-        assert (
-            room_accumulator is not None
-            and icon_accumulator is not None
-            and heat_accumulator is not None
-        )
-        return room_accumulator / 4.0, icon_accumulator / 4.0, heat_accumulator / 4.0
+        # Normalize and upload once. Keep rotations sequential by default to limit VRAM.
+        batch_size = self.config.tta_batch_size
+        if batch_size not in (1, 2, 4):
+            raise ValueError("tta_batch_size must be 1, 2 or 4")
+        accumulator = None
+        for start in range(0, 4, batch_size):
+            turns = range(start, start + batch_size)
+            rotated = torch.cat([torch.rot90(tensor, k, (-2, -1)) for k in turns])
+            outputs = self.model(rotated)
+            for offset, k in enumerate(turns):
+                restored = torch.rot90(outputs[offset], -k, (-2, -1))
+                accumulator = restored.clone() if accumulator is None else accumulator + restored
+        assert accumulator is not None
+        return split_raw_output((accumulator / 4.0).cpu().numpy())
 
     def predict_vector(self, image: np.ndarray) -> VectorFloorplan:
         room_logits, icon_logits, heatmaps = self.predict_arrays(image)

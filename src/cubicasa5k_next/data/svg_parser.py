@@ -108,6 +108,18 @@ def parse_svg_polygons(svg_path: str | Path) -> list[AnnotatedPolygon]:
     """Parse polygons/rects from an SVG annotation file."""
     tree = ET.parse(str(svg_path))
     root = tree.getroot()
+    return _polygons_from_root(root)
+
+
+def parse_svg_annotation(
+    svg_path: str | Path,
+) -> tuple[list[AnnotatedPolygon], tuple[float, float] | None]:
+    """Read geometry and dimensions with one XML parse."""
+    root = ET.parse(str(svg_path)).getroot()
+    return _polygons_from_root(root), _size_from_root(root)
+
+
+def _polygons_from_root(root: ET.Element) -> list[AnnotatedPolygon]:
     parent_map: dict[int, ET.Element] = {
         id(child): parent for parent in root.iter() for child in parent
     }
@@ -150,6 +162,10 @@ def read_svg_size(svg_path: str | Path) -> tuple[float, float] | None:
     except ET.ParseError:
         return None
     root = tree.getroot()
+    return _size_from_root(root)
+
+
+def _size_from_root(root: ET.Element) -> tuple[float, float] | None:
     width_raw = root.get("width")
     height_raw = root.get("height")
     view_box = root.get("viewBox") or root.get("viewbox")
