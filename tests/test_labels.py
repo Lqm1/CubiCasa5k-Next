@@ -24,3 +24,6 @@ def test_default_config_matches_constants() -> None:
     assert config.resolve_icon_token("Window") == config.icon_index["window"]
     assert config.resolve_icon_token("BaseCabinet") is None
     assert config.resolve_icon_token("Shower") is None
+    # Unknown tokens fall back safely without config changes.
+    assert config.resolve_room_token("WesternRoom") == config.room_index["other_room"]
+    assert config.resolve_icon_token("OtherFixture") is None

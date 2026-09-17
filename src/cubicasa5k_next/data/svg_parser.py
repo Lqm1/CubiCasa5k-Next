@@ -1,11 +1,13 @@
-"""CubiCasa5k SVG annotation reader (group-structured, transform-aware).
+"""SVG floorplan annotation reader (group-structured, transform-aware).
 
-Real floorplans encode semantics per ``<g>`` element, not per shape:
+Dispatch keys off the ``id`` attribute for structural groups and the
+``class`` tokens where the id is only a UUID:
 
-- ``<g id="Wall">`` / ``<g id="Railing">``: direct child ``<polygon>`` is the shape.
-- ``<g id="Door">`` / ``<g id="Window">``: direct child ``<polygon>`` is the shape.
-  Nested ``Threshold`` / ``Panel`` / ``PanelArea`` / ``Glass`` groups are
-  duplicates/decorations and are ignored.
+- ``<g id="Wall">`` / ``<g id="Railing">``: direct child ``<polygon>`` is
+  the shape.
+- ``<g id="Door">`` / ``<g id="Window">``: direct child ``<polygon>`` is
+  the shape. Nested ``Threshold`` / ``Panel`` / ``PanelArea`` / ``Glass``
+  groups are duplicates/decorations and are ignored.
 - ``<g class="Space Bedroom">``: second class token is the room token;
   direct child ``<polygon>`` is the shape. ``Dimension`` subtrees are ignored.
 - ``<g class="FixedFurniture Toilet" transform="matrix(...)">``: geometry is
@@ -275,6 +277,11 @@ def parse_floorplan_svg(
     for element in root.iter():
         if _tag(element) != "g":
             continue
+        # Structural dispatch keys off the id attribute only
+        # (id="Wall"/"Railing"/"Door"/"Window"). The label side guarantees
+        # these ids; class carries only the subtype detail. Space and
+        # FixedFurniture groups carry UUID ids, so their category comes from
+        # the class tokens instead.
         element_id = (element.get("id") or "").strip()
         class_attr = (element.get("class") or "").strip()
 
@@ -302,7 +309,7 @@ def parse_floorplan_svg(
                 continue
             shape = OpeningShape(points=tuple(points), is_door=is_door, label_index=int(resolved))
             (doors if is_door else windows).append(shape)
-        elif "FixedFurniture " in f"{class_attr} " or class_attr.startswith("FixedFurniture"):
+        elif "FixedFurniture " in class_attr:
             token = _second_token(class_attr)
             if not token:
                 continue
@@ -329,7 +336,6 @@ def parse_floorplan_svg(
                     continue
                 mapped = boxed
             else:
-                # Keep quad structure; round to int-like floats.
                 mapped = [(float(x), float(y)) for x, y in rounded]
             if len(mapped) != 4:
                 boxed = _bbox_quad(mapped)
@@ -339,7 +345,7 @@ def parse_floorplan_svg(
             icons.append(
                 IconShape(points=tuple(mapped), svg_token=token, label_index=int(resolved))
             )
-        elif "Space " in f"{class_attr} " or class_attr.startswith("Space"):
+        elif "Space " in class_attr:
             token = _second_token(class_attr)
             if not token:
                 continue
@@ -353,6 +359,8 @@ def parse_floorplan_svg(
                     label_index=config.resolve_room_token(token),
                 )
             )
+        # Anything else (Threshold, Panel, Glass, DimensionMark, Column,
+        # editor controls, ...) is decoration: never a label.
 
     return FloorplanVector(
         rooms=tuple(rooms),
