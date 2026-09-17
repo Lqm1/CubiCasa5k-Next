@@ -12,7 +12,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import torch
-import torch.nn.functional as nn_functional
+import torch.nn.functional as F
 from torch import nn
 
 from cubicasa5k_next.config import InferenceConfig
@@ -36,9 +36,9 @@ class PreActivationBottleneck(nn.Module):
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:
         shortcut = features
-        activated = nn_functional.relu(self.bn(features), inplace=True)
-        reduced = nn_functional.relu(self.bn1(self.conv1(activated)), inplace=True)
-        refined = nn_functional.relu(self.bn2(self.conv2(reduced)), inplace=True)
+        activated = F.relu(self.bn(features), inplace=True)
+        reduced = F.relu(self.bn1(self.conv1(activated)), inplace=True)
+        refined = F.relu(self.bn2(self.conv2(reduced)), inplace=True)
         expanded = self.conv3(refined)
         if self.needs_projection:
             shortcut = self.conv4(features)  # type: ignore[attr-defined]
@@ -111,7 +111,7 @@ class FloorplanHourglass(nn.Module):
     def _add_upsampled(upper: torch.Tensor, lateral: torch.Tensor) -> torch.Tensor:
         _, _, target_h, target_w = lateral.shape
         if upper.shape != lateral.shape:
-            upper = nn_functional.interpolate(
+            upper = F.interpolate(
                 upper, size=(target_h, target_w), mode="bilinear", align_corners=False
             )
         return upper + lateral
@@ -148,13 +148,17 @@ def run_hourglass_inference(
     checkpoint: str | Path,
     image_path: str | Path,
     config: InferenceConfig | None = None,
+    num_heatmap_channels: int = 21,
+    num_room_classes: int = 12,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    from cubicasa5k_next.utils.checkpoint import load_checkpoint
+
     active = config or InferenceConfig()
-    payload = torch.load(str(checkpoint), map_location="cpu", weights_only=False)
-    state = payload.get("model_state", payload) if isinstance(payload, dict) else payload
-    model = FloorplanHourglass(44)
-    model.load_state_dict(state, strict=False)
+    model, _ = load_checkpoint(checkpoint, device=torch.device("cpu"))
     model.eval()
+    total = int(model.conv4_.out_channels)
+    heatmaps_ch = min(num_heatmap_channels, total)
+    rooms_ch = min(num_room_classes, max(total - heatmaps_ch, 0))
     image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
     if image is None:
         raise FileNotFoundError(f"Could not read image: {image_path}")
@@ -166,10 +170,8 @@ def run_hourglass_inference(
     with torch.no_grad():
         raw = model(tensor)
         if raw.shape[-2:] != (size, size):
-            raw = nn_functional.interpolate(
-                raw, size=(size, size), mode="bilinear", align_corners=False
-            )
-    room_logits = raw[0, 21:33].numpy()
-    icon_logits = raw[0, 33:44].numpy()
-    heatmaps = raw[0, :21].numpy()
+            raw = F.interpolate(raw, size=(size, size), mode="bilinear", align_corners=False)
+    room_logits = raw[0, heatmaps_ch : heatmaps_ch + rooms_ch].numpy()
+    icon_logits = raw[0, heatmaps_ch + rooms_ch :].numpy()
+    heatmaps = raw[0, :heatmaps_ch].numpy()
     return room_logits, icon_logits, heatmaps

@@ -37,7 +37,11 @@ def make_dataset(tmp_path, cache_mb=256):
     annotation = tmp_path / "model.svg"
     cv2.imwrite(str(image), np.full((64, 64, 3), 200, dtype=np.uint8))
     annotation.write_text(
-        '<svg width="64" height="64"><rect x="4" y="4" width="48" height="48" class="living_room"/></svg>'
+        '<svg width="64" height="64">'
+        '<g class="Space LivingRoom"><polygon points="4,4 52,4 52,52 4,52"/></g>'
+        '<g id="Wall"><polygon points="4,4 52,4 52,10 4,10"/></g>'
+        '<g id="Door"><polygon points="20,4 30,4 30,10 20,10"/></g>'
+        "</svg>"
     )
     return SvgFloorplanDataset(
         [image, image],
@@ -53,16 +57,16 @@ def test_target_cache_parity_and_invalidation(tmp_path, monkeypatch):
     first = dataset[0]
     from cubicasa5k_next.data import dataset as module
 
-    original = module.parse_svg_annotation
+    original = module.parse_floorplan_svg
     monkeypatch.setattr(
         module,
-        "parse_svg_annotation",
+        "parse_floorplan_svg",
         lambda *_: (_ for _ in ()).throw(AssertionError("cache missed")),
     )
     second = dataset[0]
     for name in ("image", "room_labels", "icon_labels", "heatmaps"):
         assert torch.equal(getattr(first, name), getattr(second, name))
-    monkeypatch.setattr(module, "parse_svg_annotation", original)
+    monkeypatch.setattr(module, "parse_floorplan_svg", original)
     dataset.annotation_paths[0].write_text('<svg width="64" height="64"></svg>')
     assert not torch.equal(dataset[0].room_labels, first.room_labels)
 

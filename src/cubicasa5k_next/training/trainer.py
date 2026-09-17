@@ -55,11 +55,13 @@ def build_dataloaders(
 
 def _split_raw_output(
     raw: torch.Tensor,
+    num_heatmap_channels: int = 21,
+    num_room_classes: int = 12,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    # The model already applies sigmoid to the first 21 channels.
-    heatmaps = raw[:, :21]
-    room_logits = raw[:, 21:33]
-    icon_logits = raw[:, 33:44]
+    # The model already applies sigmoid to the heatmap channels.
+    heatmaps = raw[:, :num_heatmap_channels]
+    room_logits = raw[:, num_heatmap_channels : num_heatmap_channels + num_room_classes]
+    icon_logits = raw[:, num_heatmap_channels + num_room_classes :]
     return room_logits, icon_logits, heatmaps
 
 
@@ -108,8 +110,10 @@ def train_model(
     set_random_seed(config.seed)
     active_device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model = FloorplanHourglass(44).to(active_device)
-    criterion = UncertaintyWeightedLoss(num_heatmap_channels=21).to(active_device)
+    model = FloorplanHourglass(config.model.num_outputs).to(active_device)
+    criterion = UncertaintyWeightedLoss(num_heatmap_channels=config.model.num_heatmap_channels).to(
+        active_device
+    )
     optimizer = torch.optim.Adam(
         list(model.parameters()) + list(criterion.parameters()),
         lr=config.learning_rate,
@@ -181,7 +185,11 @@ def train_model(
                 optimizer.zero_grad(set_to_none=True)
                 with torch.amp.autocast("cuda", enabled=active_device.type == "cuda"):
                     raw = model(images)
-                    room_logits, icon_logits, heat_pred = _split_raw_output(raw)
+                    room_logits, icon_logits, heat_pred = _split_raw_output(
+                        raw,
+                        config.model.num_heatmap_channels,
+                        config.model.num_room_classes,
+                    )
                     loss_output = criterion(
                         heat_pred, heatmaps, room_logits, room_labels, icon_logits, icon_labels
                     )
@@ -205,6 +213,9 @@ def train_model(
                 validation_loader,
                 active_device,
                 max_images=config.tensorboard_max_images if log_images else 0,
+                num_heatmap_channels=config.model.num_heatmap_channels,
+                num_room_classes=config.model.num_room_classes,
+                num_icon_classes=config.model.num_icon_classes,
             )
             scheduler.step(snapshot.loss)
 
@@ -311,7 +322,14 @@ def train_model(
 
 @torch.no_grad()
 def evaluate_detailed(
-    model, criterion, loader: DataLoader, device: torch.device, max_images: int = 0
+    model,
+    criterion,
+    loader: DataLoader,
+    device: torch.device,
+    max_images: int = 0,
+    num_heatmap_channels: int = 21,
+    num_room_classes: int = 12,
+    num_icon_classes: int = 11,
 ) -> ValidationSnapshot:
     """Evaluate the full validation split and keep samples for TensorBoard."""
     model.eval()
@@ -322,8 +340,12 @@ def evaluate_detailed(
     icon_ce = torch.zeros((), dtype=torch.float64, device=device)
     heat_mse = torch.zeros((), dtype=torch.float64, device=device)
     count = 0
-    room_confusion = torch.zeros((12, 12), dtype=torch.int64, device=device)
-    icon_confusion = torch.zeros((11, 11), dtype=torch.int64, device=device)
+    room_confusion = torch.zeros(
+        (num_room_classes, num_room_classes), dtype=torch.int64, device=device
+    )
+    icon_confusion = torch.zeros(
+        (num_icon_classes, num_icon_classes), dtype=torch.int64, device=device
+    )
     sample_images: torch.Tensor | None = None
     sample_room_targets: torch.Tensor | None = None
     sample_room_preds: torch.Tensor | None = None
@@ -334,7 +356,9 @@ def evaluate_detailed(
         icon_labels = batch["icon_labels"].to(device, non_blocking=True)
         heatmaps = batch["heatmaps"].to(device, non_blocking=True)
         raw = model(images)
-        room_logits, icon_logits, heat_pred = _split_raw_output(raw)
+        room_logits, icon_logits, heat_pred = _split_raw_output(
+            raw, num_heatmap_channels, num_room_classes
+        )
         loss_output = criterion(
             heat_pred, heatmaps, room_logits, room_labels, icon_logits, icon_labels
         )
@@ -347,16 +371,22 @@ def evaluate_detailed(
         heat_mse += loss_output.heatmap_mse.double() * batch_size
         count += batch_size
         room_confusion += torch.bincount(
-            (room_labels * 12 + room_logits.argmax(dim=1)).flatten(), minlength=144
-        ).reshape(12, 12)
+            (room_labels * num_room_classes + room_logits.argmax(dim=1)).flatten(),
+            minlength=num_room_classes * num_room_classes,
+        ).reshape(num_room_classes, num_room_classes)
         icon_confusion += torch.bincount(
-            (icon_labels * 11 + icon_logits.argmax(dim=1)).flatten(), minlength=121
-        ).reshape(11, 11)
+            (icon_labels * num_icon_classes + icon_logits.argmax(dim=1)).flatten(),
+            minlength=num_icon_classes * num_icon_classes,
+        ).reshape(num_icon_classes, num_icon_classes)
         if max_images > 0 and sample_images is None:
             keep = min(max_images, batch_size)
             sample_images = batch["image"][:keep].cpu().clone()
-            sample_room_targets = _label_map_for_display(batch["room_labels"][:keep].cpu(), 12)
-            sample_room_preds = _label_map_for_display(room_logits[:keep].cpu().argmax(dim=1), 12)
+            sample_room_targets = _label_map_for_display(
+                batch["room_labels"][:keep].cpu(), num_room_classes
+            )
+            sample_room_preds = _label_map_for_display(
+                room_logits[:keep].cpu().argmax(dim=1), num_room_classes
+            )
             sample_heatmaps = heat_pred[:keep].cpu().clamp(0.0, 1.0)
     denom = max(count, 1)
     room_miou, room_accuracy = _confusion_scores(room_confusion)

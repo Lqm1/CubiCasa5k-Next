@@ -28,6 +28,11 @@ def vectorize_prediction(
     heatmaps: np.ndarray,  # (21, H, W)
     junction_threshold: float = 0.4,
     alignment_tolerance: int = 10,
+    wall_class_index: int = 2,
+    window_class_index: int = 1,
+    door_class_index: int = 2,
+    room_ignored_indices: tuple[int, ...] = (0, 2),
+    icon_empty_index: int = 0,
 ) -> VectorFloorplan:
     room_labels = np.argmax(room_logits, axis=0).astype(np.int64)
     icon_labels = np.argmax(icon_logits, axis=0).astype(np.int64)
@@ -38,6 +43,11 @@ def vectorize_prediction(
         icon_labels,
         junctions,
         alignment_tolerance=alignment_tolerance,
+        wall_class_index=wall_class_index,
+        window_class_index=window_class_index,
+        door_class_index=door_class_index,
+        room_ignored_indices=room_ignored_indices,
+        icon_empty_index=icon_empty_index,
     )
 
 
@@ -46,14 +56,30 @@ def vectorize_from_junctions(
     icon_labels: np.ndarray,
     junctions: list[DetectedJunction],
     alignment_tolerance: int = 10,
+    wall_class_index: int = 2,
+    window_class_index: int = 1,
+    door_class_index: int = 2,
+    room_ignored_indices: tuple[int, ...] = (0, 2),
+    icon_empty_index: int = 0,
 ) -> VectorFloorplan:
     """Vectorize from an existing junction list and label maps."""
 
-    walls = infer_wall_segments(junctions, room_labels, tolerance=alignment_tolerance)
-    rooms = recover_room_polygons(junctions, room_labels, tolerance=alignment_tolerance)
-    icons = recover_icon_boxes(junctions, icon_labels, tolerance=alignment_tolerance)
+    walls = infer_wall_segments(
+        junctions, room_labels, wall_class_index=wall_class_index, tolerance=alignment_tolerance
+    )
+    rooms = recover_room_polygons(
+        junctions, room_labels, tolerance=alignment_tolerance, ignored_indices=room_ignored_indices
+    )
+    icons = recover_icon_boxes(
+        junctions, icon_labels, tolerance=alignment_tolerance, empty_index=icon_empty_index
+    )
     openings = recover_opening_segments(
-        junctions, icon_labels, walls, tolerance=alignment_tolerance
+        junctions,
+        icon_labels,
+        walls,
+        tolerance=alignment_tolerance,
+        window_class_index=window_class_index,
+        door_class_index=door_class_index,
     )
 
     return VectorFloorplan(

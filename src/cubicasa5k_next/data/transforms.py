@@ -3,10 +3,46 @@
 from __future__ import annotations
 
 import random
+from dataclasses import dataclass
 
 import cv2
 import numpy as np
 import torch
+
+
+@dataclass(frozen=True)
+class LetterboxGeom:
+    """Shared image/vector geometry: scale long side, then center-pad."""
+
+    scale: float
+    top: int
+    left: int
+    new_height: int
+    new_width: int
+    target_size: int
+
+
+def letterbox_geometry(height: int, width: int, target_size: int) -> LetterboxGeom:
+    scale = target_size / max(height, width)
+    new_height = int(round(height * scale))
+    new_width = int(round(width * scale))
+    top = (target_size - new_height) // 2
+    left = (target_size - new_width) // 2
+    return LetterboxGeom(
+        scale=scale,
+        top=top,
+        left=left,
+        new_height=new_height,
+        new_width=new_width,
+        target_size=target_size,
+    )
+
+
+def apply_letterbox_to_points(
+    points: tuple[tuple[float, float], ...] | list[tuple[float, float]],
+    geom: LetterboxGeom,
+) -> list[tuple[float, float]]:
+    return [(x * geom.scale + geom.left, y * geom.scale + geom.top) for x, y in points]
 
 
 def resize_with_padding(
@@ -14,15 +50,23 @@ def resize_with_padding(
 ) -> tuple[np.ndarray, float, int, int]:
     """Scale the long side to ``target_size`` and zero-pad to a square."""
     height, width = image.shape[:2]
-    scale = target_size / max(height, width)
-    new_height = int(round(height * scale))
-    new_width = int(round(width * scale))
-    resized = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
+    geom = letterbox_geometry(height, width, target_size)
+    resized = cv2.resize(image, (geom.new_width, geom.new_height), interpolation=cv2.INTER_LINEAR)
     canvas = np.full((target_size, target_size, 3), fill, dtype=resized.dtype)
-    top = (target_size - new_height) // 2
-    left = (target_size - new_width) // 2
-    canvas[top : top + new_height, left : left + new_width] = resized
-    return canvas, scale, top, left
+    canvas[geom.top : geom.top + geom.new_height, geom.left : geom.left + geom.new_width] = resized
+    return canvas, geom.scale, geom.top, geom.left
+
+
+def resize_mask_letterbox(mask: np.ndarray, geom: LetterboxGeom, fill: int = 0) -> np.ndarray:
+    """Resize a (H, W) label mask with the same geometry (nearest-neighbour)."""
+    resized = cv2.resize(
+        mask,
+        (geom.new_width, geom.new_height),
+        interpolation=cv2.INTER_NEAREST,
+    )
+    canvas = np.full((geom.target_size, geom.target_size), fill, dtype=resized.dtype)
+    canvas[geom.top : geom.top + geom.new_height, geom.left : geom.left + geom.new_width] = resized
+    return canvas
 
 
 def random_right_angle_rotation(

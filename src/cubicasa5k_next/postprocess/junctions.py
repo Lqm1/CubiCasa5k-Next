@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from cubicasa5k_next.labels import (
+from cubicasa5k_next.labels_config import (
     ICON_CORNER_CHANNEL_RANGE,
     NUM_HEATMAP_CHANNELS,
     OPENING_CHANNEL_RANGE,

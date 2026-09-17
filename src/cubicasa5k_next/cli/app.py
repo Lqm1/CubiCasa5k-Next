@@ -35,8 +35,10 @@ def _resolve_device(requested: str) -> torch.device:
 
 @app.command()
 def train(
-    train_root: Path = typer.Argument(..., help="Dataset root (pairs or folders)"),
-    validation_root: Path = typer.Argument(..., help="Validation dataset root"),
+    train_root: Path = typer.Argument(..., help="Train split dir (images/ + annotations/)"),
+    validation_root: Path = typer.Argument(
+        ..., help="Validation split dir (images/ + annotations/)"
+    ),
     checkpoint_dir: Path = typer.Option(Path("checkpoints"), help="Where to store checkpoints"),
     epochs: int = typer.Option(400, help="Maximum training epochs"),
     batch_size: int = typer.Option(20, help="Batch size"),
@@ -46,6 +48,9 @@ def train(
     num_workers: int = typer.Option(4, help="DataLoader workers (use 0 on Windows CPU)"),
     weights: Path | None = typer.Option(None, help="Resume from a checkpoint file"),
     device: str = typer.Option("auto", help="Compute device (auto, cpu, or cuda)"),
+    labels_config: Path | None = typer.Option(
+        None, help="Room/icon label config YAML (default: built-in 12/11)"
+    ),
     tensorboard_dir: Path | None = typer.Option(
         None, help="TensorBoard log dir (default: <checkpoint_dir>/tensorboard)"
     ),
@@ -70,10 +75,15 @@ def train(
     ),
 ) -> None:
     """Train the hourglass model (supports resuming from a checkpoint)."""
+    from cubicasa5k_next.labels_config import default_label_config, load_label_config
+
     active_device = _resolve_device(device)
     if active_device.type == "cuda":
         torch.backends.cudnn.benchmark = True
     set_random_seed(seed)
+    label_config = (
+        load_label_config(labels_config) if labels_config is not None else default_label_config()
+    )
     augmentation = AugmentationConfig(image_size=image_size)
     resolved_tensorboard_dir: str | None
     if no_tensorboard:
@@ -88,7 +98,7 @@ def train(
         learning_rate=learning_rate,
         seed=seed,
         checkpoint_dir=str(checkpoint_dir),
-        model=ModelConfig(),
+        model=ModelConfig.for_label_counts(label_config.num_rooms, label_config.num_icons),
         augmentation=augmentation,
         num_workers=num_workers,
         tensorboard_dir=resolved_tensorboard_dir,
@@ -112,6 +122,7 @@ def train(
         augmentation,
         training=True,
         target_cache_mb=target_cache_mb,
+        label_config=label_config,
     )
     validation_dataset = SvgFloorplanDataset(
         validation_images,
@@ -119,6 +130,7 @@ def train(
         augmentation,
         training=False,
         target_cache_mb=target_cache_mb,
+        label_config=label_config,
     )
     best_path = train_model(
         train_dataset, validation_dataset, config, device=active_device, resume_checkpoint=weights
@@ -134,8 +146,13 @@ def infer(
     use_tta: bool = typer.Option(False, help="Average predictions over 4 rotations"),
     tta_batch_size: int = typer.Option(1, min=1, max=4, help="TTA batch size: 1, 2 or 4"),
     device: str = typer.Option("auto", help="Compute device (auto, cpu, or cuda)"),
+    labels_config: Path | None = typer.Option(
+        None, help="Room/icon label config YAML (default: built-in 12/11)"
+    ),
 ) -> None:
     """Run inference and save segmentation masks plus vectorization stats."""
+    from cubicasa5k_next.labels_config import default_label_config, load_label_config
+
     output_dir.mkdir(parents=True, exist_ok=True)
     active_device = _resolve_device(device)
     if tta_batch_size not in (1, 2, 4):
@@ -143,8 +160,18 @@ def infer(
     inference_config = InferenceConfig(
         use_test_time_rotation=use_tta, tta_batch_size=tta_batch_size, device=active_device.type
     )
+    label_config = (
+        load_label_config(labels_config) if labels_config is not None else default_label_config()
+    )
     # Single hourglass path handles checkpoint files with matching keys.
-    predictor = FloorplanPredictor.from_checkpoint(checkpoint, inference_config, active_device)
+    predictor = FloorplanPredictor.from_checkpoint(
+        checkpoint,
+        inference_config,
+        active_device,
+        num_heatmap_channels=21,
+        num_room_classes=label_config.num_rooms,
+        num_icon_classes=label_config.num_icons,
+    )
     rgb = load_rgb_image(image, target_size=inference_config.image_size)
     room_logits, icon_logits, heatmaps = predictor.predict_arrays(rgb)
 
@@ -152,12 +179,22 @@ def infer(
 
     from cubicasa5k_next.postprocess.vectorize import vectorize_prediction
 
+    wall_index = label_config.room_index.get("wall", 2)
+    background_index = label_config.room_index.get("background", 0)
+    window_index = label_config.icon_index.get("window", 1)
+    door_index = label_config.icon_index.get("door", 2)
+    empty_index = label_config.icon_index.get("empty", 0)
     vector_result = vectorize_prediction(
         room_logits,
         icon_logits,
         heatmaps,
         junction_threshold=inference_config.junction_threshold,
         alignment_tolerance=inference_config.alignment_tolerance_px,
+        wall_class_index=int(wall_index),
+        window_class_index=int(window_index),
+        door_class_index=int(door_index),
+        room_ignored_indices=(int(background_index), int(wall_index)),
+        icon_empty_index=int(empty_index),
     )
     room_labels = np.argmax(room_logits, axis=0).astype("int64")
     icon_labels = np.argmax(icon_logits, axis=0).astype("int64")

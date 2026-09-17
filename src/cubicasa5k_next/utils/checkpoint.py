@@ -15,7 +15,17 @@ def load_checkpoint(
     active_device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
     payload = torch.load(str(checkpoint_path), map_location=active_device, weights_only=False)
     state = payload.get("model_state", payload) if isinstance(payload, dict) else {}
-    model = FloorplanHourglass(44).to(active_device)
+    num_outputs = 44
+    if isinstance(state, dict):
+        for key in ("conv4_.weight", "upsample.weight", "upsample.bias"):
+            tensor = state.get(key)
+            if tensor is not None and hasattr(tensor, "shape"):
+                if "conv4_" in key:
+                    num_outputs = int(tensor.shape[0])
+                elif "upsample" in key and tensor.dim() >= 1:
+                    num_outputs = int(tensor.shape[0] if "weight" in key else tensor.shape[0])
+                break
+    model = FloorplanHourglass(num_outputs).to(active_device)
     model.load_state_dict(state, strict=False)
     metadata = payload if isinstance(payload, dict) else {}
     return model, metadata

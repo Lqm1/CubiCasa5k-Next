@@ -7,7 +7,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import torch
-from torch.nn import functional as invoke_functional
+from torch.nn import functional as F
 
 from cubicasa5k_next.config import InferenceConfig
 from cubicasa5k_next.data.transforms import to_normalized_tensor
@@ -16,11 +16,15 @@ from cubicasa5k_next.postprocess.vectorize import VectorFloorplan, vectorize_pre
 from cubicasa5k_next.utils.checkpoint import load_checkpoint
 
 
-def split_raw_output(raw: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Split 44 channels into room logits (12), icon logits (11), heatmaps (21)."""
-    heatmaps = raw[:21]
-    room_logits = raw[21:33]
-    icon_logits = raw[33:44]
+def split_raw_output(
+    raw: np.ndarray,
+    num_heatmap_channels: int = 21,
+    num_room_classes: int = 12,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Split stacked outputs into room/icon logits and heatmaps."""
+    heatmaps = raw[:num_heatmap_channels]
+    room_logits = raw[num_heatmap_channels : num_heatmap_channels + num_room_classes]
+    icon_logits = raw[num_heatmap_channels + num_room_classes :]
     return room_logits, icon_logits, heatmaps
 
 
@@ -30,10 +34,19 @@ class FloorplanPredictor:
         model: FloorplanHourglass,
         config: InferenceConfig | None = None,
         device: torch.device | None = None,
+        num_heatmap_channels: int = 21,
+        num_room_classes: int = 12,
+        num_icon_classes: int = 11,
     ) -> None:
         self.config = config or InferenceConfig()
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = model.to(self.device).eval()
+        self.num_heatmap_channels = num_heatmap_channels
+        self.num_room_classes = num_room_classes
+        self.num_icon_classes = num_icon_classes
+
+    def _split(self, raw: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        return split_raw_output(raw, self.num_heatmap_channels, self.num_room_classes)
 
     @classmethod
     def from_checkpoint(
@@ -41,9 +54,27 @@ class FloorplanPredictor:
         checkpoint_path: str | Path,
         config: InferenceConfig | None = None,
         device: torch.device | None = None,
+        num_heatmap_channels: int | None = None,
+        num_room_classes: int | None = None,
+        num_icon_classes: int | None = None,
     ) -> FloorplanPredictor:
-        model, _ = load_checkpoint(checkpoint_path, device=device)
-        return cls(model, config, device)
+        model, metadata = load_checkpoint(checkpoint_path, device=device)
+        stored = metadata.get("config") if isinstance(metadata, dict) else None
+        heatmaps = num_heatmap_channels
+        rooms = num_room_classes
+        icons = num_icon_classes
+        if stored is not None and hasattr(stored, "model"):
+            heatmaps = heatmaps or int(stored.model.num_heatmap_channels)
+            rooms = rooms or int(stored.model.num_room_classes)
+            icons = icons or int(stored.model.num_icon_classes)
+        return cls(
+            model,
+            config,
+            device,
+            num_heatmap_channels=heatmaps or 21,
+            num_room_classes=rooms or 12,
+            num_icon_classes=icons or 11,
+        )
 
     @torch.inference_mode()
     def predict_arrays(self, image: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -56,10 +87,10 @@ class FloorplanPredictor:
             raw = self.model(tensor)[0].cpu().numpy()
             if raw.shape[-2:] != (size, size):
                 raw_tensor = torch.from_numpy(raw).unsqueeze(0)
-                raw = invoke_functional.interpolate(
+                raw = F.interpolate(
                     raw_tensor, size=(size, size), mode="bilinear", align_corners=False
                 )[0].numpy()
-            return split_raw_output(raw)
+            return self._split(raw)
 
         # Normalize and upload once. Keep rotations sequential by default to limit VRAM.
         batch_size = self.config.tta_batch_size
@@ -74,7 +105,7 @@ class FloorplanPredictor:
                 restored = torch.rot90(outputs[offset], -k, (-2, -1))
                 accumulator = restored.clone() if accumulator is None else accumulator + restored
         assert accumulator is not None
-        return split_raw_output((accumulator / 4.0).cpu().numpy())
+        return self._split((accumulator / 4.0).cpu().numpy())
 
     def predict_vector(self, image: np.ndarray) -> VectorFloorplan:
         room_logits, icon_logits, heatmaps = self.predict_arrays(image)

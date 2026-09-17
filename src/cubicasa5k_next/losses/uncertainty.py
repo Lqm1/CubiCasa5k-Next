@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 import torch
 from torch import nn
-from torch.nn import functional as loss_functional
+from torch.nn import functional as F
 
 
 @dataclass
@@ -47,12 +47,12 @@ class UncertaintyWeightedLoss(nn.Module):
         room_targets = target_room_labels.long()
         icon_targets = target_icon_labels.long()
 
-        plain_room_ce = loss_functional.cross_entropy(predicted_room_logits, room_targets)
-        plain_icon_ce = loss_functional.cross_entropy(predicted_icon_logits, icon_targets)
-        scaled_room_ce = loss_functional.cross_entropy(
+        plain_room_ce = F.cross_entropy(predicted_room_logits, room_targets)
+        plain_icon_ce = F.cross_entropy(predicted_icon_logits, icon_targets)
+        scaled_room_ce = F.cross_entropy(
             predicted_room_logits * torch.exp(-self.log_vars[0]), room_targets
         )
-        scaled_icon_ce = loss_functional.cross_entropy(
+        scaled_icon_ce = F.cross_entropy(
             predicted_icon_logits * torch.exp(-self.log_vars[1]), icon_targets
         )
 
@@ -78,11 +78,23 @@ class UncertaintyWeightedLoss(nn.Module):
         )
 
     def forward_stacked_tensors(
-        self, raw_outputs: torch.Tensor, label_tensor: torch.Tensor
+        self,
+        raw_outputs: torch.Tensor,
+        label_tensor: torch.Tensor,
+        num_heatmap_channels: int | None = None,
+        num_room_classes: int | None = None,
+        num_icon_classes: int | None = None,
     ) -> MultiTaskLossOutput:
-        """Accept 44ch outputs and 23ch labels ([21,1,1] split)."""
-        heat_pred, room_logits, icon_logits = torch.split(raw_outputs, [21, 12, 11], dim=1)
-        heat_target, room_target, icon_target = torch.split(label_tensor, [21, 1, 1], dim=1)
+        """Split stacked outputs/labels with configurable class counts."""
+        heat_channels = num_heatmap_channels or self.log_vars_mse.numel()
+        room_classes = num_room_classes or (raw_outputs.shape[1] - heat_channels - 1)
+        icon_classes = num_icon_classes or (raw_outputs.shape[1] - heat_channels - room_classes)
+        heat_pred, room_logits, icon_logits = torch.split(
+            raw_outputs, [heat_channels, room_classes, icon_classes], dim=1
+        )
+        heat_target, room_target, icon_target = torch.split(
+            label_tensor, [heat_channels, 1, 1], dim=1
+        )
         return self.forward(
             heat_pred,
             heat_target,

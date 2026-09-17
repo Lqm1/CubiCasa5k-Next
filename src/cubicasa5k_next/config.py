@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class ModelConfig:
-    """Hourglass output layout aligned to past behavior (21+12+11=44)."""
+    """Hourglass output layout (21 heatmaps + R rooms + I icons = 44 default)."""
 
     num_heatmap_channels: int = 21
     num_room_classes: int = 12
@@ -16,6 +16,16 @@ class ModelConfig:
     @property
     def num_outputs(self) -> int:
         return self.num_heatmap_channels + self.num_room_classes + self.num_icon_classes
+
+    @classmethod
+    def for_label_counts(
+        cls, num_rooms: int, num_icons: int, num_heatmaps: int = 21
+    ) -> ModelConfig:
+        return cls(
+            num_heatmap_channels=num_heatmaps,
+            num_room_classes=num_rooms,
+            num_icon_classes=num_icons,
+        )
 
 
 @dataclass(frozen=True)

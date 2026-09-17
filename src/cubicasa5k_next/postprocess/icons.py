@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from cubicasa5k_next.labels import ICON_CORNER_CHANNEL_RANGE
+from cubicasa5k_next.labels_config import ICON_CORNER_CHANNEL_RANGE
 from cubicasa5k_next.postprocess.junctions import DetectedJunction
 
 
@@ -29,6 +29,7 @@ def recover_icon_boxes(
     junctions: list[DetectedJunction],
     icon_labels: np.ndarray,
     tolerance: int = 10,
+    empty_index: int = 0,
 ) -> list[IconBox]:
     icon_points = [j for j in junctions if j.group == "icon"]
     by_kind: dict[int, list[DetectedJunction]] = {0: [], 1: [], 2: [], 3: []}
@@ -62,12 +63,12 @@ def recover_icon_boxes(
                     if patch.size == 0:
                         continue
                     votes = Counter(patch.reshape(-1).tolist())
-                    if 0 in votes and len(votes) > 1:
-                        del votes[0]
+                    if empty_index in votes and len(votes) > 1:
+                        del votes[empty_index]
                     if not votes:
                         continue
                     label, count = votes.most_common(1)[0]
-                    if label == 0:
+                    if label == empty_index:
                         continue
                     confidence = count / patch.size
                     boxes.append(

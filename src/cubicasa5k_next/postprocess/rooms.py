@@ -23,6 +23,7 @@ def recover_room_polygons(
     room_labels: np.ndarray,
     tolerance: int = 10,
     min_area: int = 100,
+    ignored_indices: tuple[int, ...] = (0, 2),
 ) -> list[RoomPolygon]:
     """Grid the interior with junction triplets, vote labels, merge neighbors.
 
@@ -31,7 +32,7 @@ def recover_room_polygons(
     """
     wall_points = [(j.x, j.y) for j in junctions if j.group == "wall"]
     if len(wall_points) < 4:
-        return _fallback_from_segmentation(room_labels, min_area)
+        return _fallback_from_segmentation(room_labels, min_area, ignored_indices)
 
     xs = sorted({x for x, _ in wall_points})
     ys = sorted({y for _, y in wall_points})
@@ -39,7 +40,7 @@ def recover_room_polygons(
     grid_x = _merge_coordinates(xs, tolerance, room_labels.shape[1])
     grid_y = _merge_coordinates(ys, tolerance, room_labels.shape[0])
     if len(grid_x) < 2 or len(grid_y) < 2:
-        return _fallback_from_segmentation(room_labels, min_area)
+        return _fallback_from_segmentation(room_labels, min_area, ignored_indices)
 
     cells: list[tuple[int, int, int, int, int]] = []  # x0,y0,x1,y1,label
     for ix in range(len(grid_x) - 1):
@@ -53,9 +54,9 @@ def recover_room_polygons(
                 continue
             votes = Counter(patch.reshape(-1).tolist())
             # Ignore background/wall votes when a room label exists.
-            for background_index in (0, 2):
-                if len(votes) > 1 and background_index in votes:
-                    del votes[background_index]
+            for ignored_index in ignored_indices:
+                if len(votes) > 1 and ignored_index in votes:
+                    del votes[ignored_index]
             if not votes:
                 continue
             label, count = votes.most_common(1)[0]
@@ -66,14 +67,14 @@ def recover_room_polygons(
     polygons: list[RoomPolygon] = []
     for x0, y0, x1, y1, label in merged:
         area = (x1 - x0) * (y1 - y0)
-        if area < min_area or label in (0, 2):
+        if area < min_area or label in ignored_indices:
             continue
         contour = np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=np.int32)
         patch = room_labels[y0:y1, x0:x1]
         confidence = float((patch == label).mean()) if patch.size else 0.0
         polygons.append(RoomPolygon(contour=contour, label_index=label, confidence=confidence))
     if not polygons:
-        return _fallback_from_segmentation(room_labels, min_area)
+        return _fallback_from_segmentation(room_labels, min_area, ignored_indices)
     return polygons
 
 
@@ -129,10 +130,12 @@ def _merge_cells(
     return current
 
 
-def _fallback_from_segmentation(room_labels: np.ndarray, min_area: int) -> list[RoomPolygon]:
+def _fallback_from_segmentation(
+    room_labels: np.ndarray, min_area: int, ignored_indices: tuple[int, ...] = (0, 2)
+) -> list[RoomPolygon]:
     polygons: list[RoomPolygon] = []
     for label in sorted(int(v) for v in np.unique(room_labels).tolist()):
-        if label in (0, 2):
+        if label in ignored_indices:
             continue
         binary = ((room_labels == label).astype(np.uint8)) * 255
         contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
